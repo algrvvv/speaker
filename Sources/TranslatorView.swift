@@ -13,9 +13,10 @@ struct TranslatorView: View {
         VStack(alignment: .leading, spacing: 10) {
             header
             if showSettings {
-                ShortcutSettings(shortcuts: shortcuts) { showSettings = false }
+                TranslatorSettings(model: model, shortcuts: shortcuts) { showSettings = false }
             } else {
                 inputCard
+                swapButton
                 outputCard
                 if model.needsAccessibilityPermission {
                     permissionNotice
@@ -107,7 +108,9 @@ struct TranslatorView: View {
     private var inputCard: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                languagePicker("Исходный язык", selection: $model.sourceID, allowsAuto: true)
+                LanguagePicker(
+                    title: "Исходный язык", selection: $model.sourceID, languages: model.languages, allowsAuto: true
+                )
                 Spacer()
                 Button {
                     if let text = NSPasteboard.general.string(forType: .string) {
@@ -140,17 +143,20 @@ struct TranslatorView: View {
         .modifier(TranslationCard())
     }
 
+    private var swapButton: some View {
+        Button(action: model.swapLanguages) {
+            Label("Поменять языки", systemImage: "arrow.up.arrow.down")
+        }
+        .controlSize(.small)
+        .disabled(!model.canSwap)
+        .help("Поменять исходный язык и язык перевода местами")
+        .frame(maxWidth: .infinity)
+    }
+
     private var outputCard: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
-                languagePicker("Язык перевода", selection: $model.targetID)
-                Button(action: model.swapLanguages) {
-                    Image(systemName: "arrow.left.arrow.right")
-                }
-                .buttonStyle(.borderless)
-                .disabled(!model.canSwap)
-                .help("Поменять языки местами")
-                .accessibilityLabel("Поменять языки местами")
+                LanguagePicker(title: "Язык перевода", selection: $model.targetID, languages: model.languages)
                 Spacer()
                 Button {
                     let pasteboard = NSPasteboard.general
@@ -182,37 +188,6 @@ struct TranslatorView: View {
         .modifier(TranslationCard(tinted: true))
     }
 
-    private func languagePicker(_ title: String, selection: Binding<String>, allowsAuto: Bool = false) -> some View {
-        let id = selection.wrappedValue
-        let name = id.isEmpty ? "Автоопределение" : TranslatorModel.languageName(id)
-        return Menu {
-            Picker(title, selection: selection) {
-                if allowsAuto {
-                    Text("Автоопределение").tag("")
-                    Divider()
-                }
-                ForEach(model.languages) { language in
-                    Text(language.name).tag(language.id)
-                }
-            }
-            .pickerStyle(.inline)
-        } label: {
-            HStack(spacing: 5) {
-                Text(name)
-                    .font(.system(size: 12, weight: .semibold))
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .disabled(model.languages.isEmpty)
-        .help(title)
-        .accessibilityLabel("\(title), \(name)")
-    }
-
     private var permissionNotice: some View {
         HStack(spacing: 8) {
             Image(systemName: "hand.raised")
@@ -232,8 +207,9 @@ struct TranslatorView: View {
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else if let source = model.detectedSource, model.sourceID.isEmpty {
-                Text("Язык текста: \(TranslatorModel.languageName(source))")
+            } else if let source = model.resultSourceID, model.sourceID.isEmpty {
+                let label = model.usedFallback ? "Резервный язык" : "Язык текста"
+                Text("\(label) — \(TranslatorModel.languageName(source))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -262,7 +238,45 @@ struct TranslatorView: View {
     }
 }
 
-private struct ShortcutSettings: View {
+private struct LanguagePicker: View {
+    let title: String
+    @Binding var selection: String
+    let languages: [TranslatorModel.Language]
+    var allowsAuto = false
+
+    var body: some View {
+        let name = selection.isEmpty ? "Автоопределение" : TranslatorModel.languageName(selection)
+        Menu {
+            Picker(title, selection: $selection) {
+                if allowsAuto {
+                    Text("Автоопределение").tag("")
+                    Divider()
+                }
+                ForEach(languages) { language in
+                    Text(language.name).tag(language.id)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            HStack(spacing: 5) {
+                Text(name)
+                    .font(.system(size: 12, weight: .semibold))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(languages.isEmpty)
+        .help(title)
+        .accessibilityLabel("\(title), \(name)")
+    }
+}
+
+private struct TranslatorSettings: View {
+    @Bindable var model: TranslatorModel
     let shortcuts: OpeningShortcutController
     let done: () -> Void
 
@@ -271,6 +285,7 @@ private struct ShortcutSettings: View {
             Text("Настройки")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
+            languageSettings
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Сочетание для открытия")
@@ -308,6 +323,31 @@ private struct ShortcutSettings: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
             shortcuts.endRecording()
         }
+    }
+
+    private var languageSettings: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Основной язык")
+                Spacer(minLength: 8)
+                LanguagePicker(
+                    title: "Основной язык", selection: $model.primaryLanguageID,
+                    languages: model.languages.filter { !TranslatorModel.sameLanguage($0.id, model.secondaryLanguageID) }
+                )
+            }
+            HStack {
+                Text("Второй основной")
+                Spacer(minLength: 8)
+                LanguagePicker(
+                    title: "Второй основной", selection: $model.secondaryLanguageID,
+                    languages: model.languages.filter { !TranslatorModel.sameLanguage($0.id, model.primaryLanguageID) }
+                )
+            }
+            Text("Если не удаётся определить язык текста, Speaker берёт основной. Если переводишь на него, берёт второй.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .modifier(TranslationCard())
     }
 }
 
