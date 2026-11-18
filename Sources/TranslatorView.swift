@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 import Translation
 
@@ -311,6 +312,7 @@ private struct TranslatorSettings: View {
                 }
             }
             .modifier(TranslationCard())
+            LoginItemSetting()
             HStack {
                 Button("По умолчанию", action: shortcuts.restoreDefault)
                     .disabled(shortcuts.isRegistered && shortcuts.shortcut.matches(.standard))
@@ -348,6 +350,68 @@ private struct TranslatorSettings: View {
                 .foregroundStyle(.secondary)
         }
         .modifier(TranslationCard())
+    }
+}
+
+private struct LoginItemSetting: View {
+    @State private var status: SMAppService.Status = .notRegistered
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Запускать при входе", isOn: Binding(
+                get: { isRegistered(status) }, set: { updateRegistration($0) }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+
+            if status == .requiresApproval {
+                Text("Подтверди автозапуск Speaker в системных настройках.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Открыть системные настройки…") { SMAppService.openSystemSettingsLoginItems() }
+                    .controlSize(.small)
+            }
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .modifier(TranslationCard())
+        .onAppear { refreshStatus() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshStatus()
+        }
+    }
+
+    private func isRegistered(_ status: SMAppService.Status) -> Bool {
+        status == .enabled || status == .requiresApproval
+    }
+
+    private func refreshStatus() {
+        let current = SMAppService.mainApp.status
+        if current != status { errorMessage = nil }
+        status = current
+    }
+
+    private func updateRegistration(_ enabled: Bool) {
+        let service = SMAppService.mainApp
+        errorMessage = nil
+        defer { status = service.status }
+
+        guard isRegistered(service.status) != enabled else { return }
+        do {
+            if enabled {
+                try service.register()
+            } else {
+                try service.unregister()
+            }
+        } catch {
+            guard isRegistered(service.status) != enabled else { return }
+            let action = enabled ? "включить" : "отключить"
+            errorMessage = "Не удалось \(action) автозапуск. \(error.localizedDescription)"
+        }
     }
 }
 
